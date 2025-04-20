@@ -12,8 +12,7 @@ A lightweight, end-to-end document scanner built using **OpenCV** and **Tesserac
 - [Working Pipeline](#-working-pipeline)
 - [Setup Instructions](#-setup-instructions)
 - [Features](#-features)
-- [Sample Output](#-sample-output)
-- [Future Enhancements](#-future-enhancements)
+- [Conclusion](#-conclusion)
 
 ---
 
@@ -105,7 +104,8 @@ After the transformation, the image is enhanced and binarized to improve the con
 ### 9. OCR (Optical Character Recognition)
 Finally, we use Tesseract OCR to extract text from the binarized document.
 
-## Setup Instructions
+---
+## 🚀 Setup Instructions
 
 ### Prerequisites
 
@@ -135,8 +135,8 @@ Clone this repository to your local machine:
 git clone https://github.com/krushangptl/Doc-Scanner-Project
 Doc-Scanner-Project
 ```
-
-### Features
+---
+### ✨ Features
 
 **Edge Detection** – Detects the edges of the document using Canny edge detection.
 
@@ -147,6 +147,6 @@ Doc-Scanner-Project
 **Output Options** – Supports exporting the result as a JPG, PNG, PDF, or TXT file.
 
 **Manual Mode** – Allows users to manually select the corners of the document if automatic detection fails.
-
-### Conclusion
+---
+### 🧾 Conclusion
 This project demonstrates how OpenCV and Tesseract OCR can be combined to build a powerful document scanning tool. From preprocessing to text extraction, this end-to-end solution can be further extended with additional features and enhancements.
