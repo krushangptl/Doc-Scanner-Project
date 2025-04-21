@@ -150,4 +150,5 @@ Doc-Scanner-Project
 
 ---
 ### 🧾 Conclusion
+
 This project demonstrates how OpenCV and Tesseract OCR can be combined to build a powerful document scanning tool. From preprocessing to text extraction, this end-to-end solution can be further extended with additional features and enhancements.
