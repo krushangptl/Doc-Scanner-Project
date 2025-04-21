@@ -147,6 +147,7 @@ Doc-Scanner-Project
 **Output Options** – Supports exporting the result as a JPG, PNG, PDF, or TXT file.
 
 **Manual Mode** – Allows users to manually select the corners of the document if automatic detection fails.
+
 ---
 ### 🧾 Conclusion
 This project demonstrates how OpenCV and Tesseract OCR can be combined to build a powerful document scanning tool. From preprocessing to text extraction, this end-to-end solution can be further extended with additional features and enhancements.
