@@ -1,112 +1,105 @@
 #!/usr/bin/env python3
 
-# libs
-
 import os
 import cv2
 import numpy as np
 import pytesseract
 from spellchecker import SpellChecker
-import re
+from PIL import Image
 
-IMG = "/home/krushang/radhey/personal/college/Doc-Scanner-Project/test/test5.png"
+
+# Image Path specifications
+IMG = "/home/krushang/radhey/personal/college/Doc-Scanner-Project/test/test1.png"
 OUTPUT_DIR = "./out"
 
 
-# helper function and pre-processing
-def show(window_name, img, wait=True):
-    cv2.imshow(window_name, img)
+# helper function to see image output
+def show(window_name, img, wait=True, max_width=1000, max_height=800):
+    h, w = img.shape[:2]
+    scale = min(max_width / w, max_height / h, 1.0)
+    if scale < 1.0:
+        new_w, new_h = int(w * scale), int(h * scale)
+        display_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    else:
+        display_img = img.copy()
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.imshow(window_name, display_img)
+
     key = cv2.waitKey(0 if wait else 1) & 0xFF
-    if key == 27:  # escape key
+    if key == 27:
         cv2.destroyAllWindows()
         raise SystemExit("Exited visualization early by user.")
+
     cv2.destroyWindow(window_name)
 
 
-def detect_document_type(image):
+# preproceding pip line
+def preprocess_for_handwriting(image):
+    print("Pre Processing Pipline")
+
+    # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    print("Grayscale")
+    show("1. Grayscale", gray)
 
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    # Increase contrast using CLAHE
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    contrast_enhanced = clahe.apply(gray)
+    print("CLAHE Contrast Enhancement")
+    show("2. Contrast Enhanced", contrast_enhanced)
 
-    mean_brightness = np.mean(gray)
-    std_brightness = np.std(gray)
+    # Denoise while preserving edges (critical for handwriting)
+    denoised = cv2.fastNlMeansDenoising(
+        contrast_enhanced, None, h=10, templateWindowSize=7, searchWindowSize=21
+    )
+    print("Denoising")
+    show("3. Denoised", denoised)
 
-    edges = cv2.Canny(gray, 50, 150)
-    edge_density = np.sum(edges > 0) / edges.size
+    # Apply bilateral filter to smooth while keeping edges
+    bilateral = cv2.bilateralFilter(denoised, 9, 75, 75)
+    print("Bilateral Filter")
+    show("4. Bilateral Filter", bilateral)
 
-    is_digital = False
+    # Adaptive thresholding - works better for varying lighting
+    adaptive_thresh = cv2.adaptiveThreshold(
+        bilateral, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 10
+    )
+    print("Adaptive Thresholding")
+    show("5. Adaptive Threshold", adaptive_thresh)
 
-    if laplacian_var > 100 and std_brightness < 50 and edge_density < 0.1:
-        is_digital = True
-        print("Document type detected: DIGITAL/SCREENSHOT")
-    else:
-        print("Document type detected: SCANNED/PHOTO")
+    # Remove small noise using morphological operations
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    morph_cleaned = cv2.morphologyEx(
+        adaptive_thresh, cv2.MORPH_OPEN, kernel, iterations=1
+    )
+    morph_cleaned = cv2.morphologyEx(
+        morph_cleaned, cv2.MORPH_CLOSE, kernel, iterations=1
+    )
+    print("Morphological Cleanups")
+    show("6. Morphological Cleanup", morph_cleaned)
 
-    return is_digital
+    # Invert if needed (text should be black on white)
+    if np.mean(morph_cleaned) > 127:
+        morph_cleaned = cv2.bitwise_not(morph_cleaned)
 
-
-def preprocess_digital_document(image):
-    print("Applying digital document preprocessing...")
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    show("Original Gray", gray)
-
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    show("Otsu Binarization", binary)
-
-    kernel = np.ones((1, 1), np.uint8)
-    denoised = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    denoised = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
-    show("Morphological Cleanup", denoised)
-
-    h, w = denoised.shape
+    # Upscale for better OCR (handwriting needs higher resolution)
+    h, w = morph_cleaned.shape
     scale_factor = 2
-    if h < 1000:
+    if h < 1500:
         scale_factor = 3
 
     upscaled = cv2.resize(
-        denoised, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC
+        morph_cleaned,
+        None,
+        fx=scale_factor,
+        fy=scale_factor,
+        interpolation=cv2.INTER_CUBIC,
     )
-    show("Upscaled", upscaled)
+    print("Upscaling")
+    show("7. Upscaled (Final)", upscaled)
 
-    return image, upscaled, upscaled
-
-
-def preprocess_scanned_document(image):
-    print("Applying scanned document preprocessing...")
-
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    corrected = cv2.merge([l, a, b])
-    corrected = cv2.cvtColor(corrected, cv2.COLOR_LAB2BGR)
-    show("Illumination Corrected", corrected)
-
-    gray = cv2.cvtColor(corrected, cv2.COLOR_BGR2GRAY)
-    show("GrayScale", gray)
-
-    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    show("Denoised", denoised)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(denoised)
-    show("CLAHE Enhanced", enhanced)
-
-    kernel_sharpen = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-    sharpened = cv2.filter2D(enhanced, -1, kernel_sharpen)
-    show("Sharpened", sharpened)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    opened = cv2.morphologyEx(sharpened, cv2.MORPH_OPEN, kernel)
-    show("Morphological Operations", opened)
-
-    binarized = cv2.adaptiveThreshold(
-        opened, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
-    show("Binarized", binarized)
-
-    return corrected, opened, binarized
+    return image, bilateral, upscaled
 
 
 def preprocessing(img_path, out_dir="./out"):
@@ -117,25 +110,18 @@ def preprocessing(img_path, out_dir="./out"):
     if image is None:
         raise RuntimeError(f"Cannot read image: {img_path}")
 
-    is_digital = detect_document_type(image)
-
-    if is_digital:
-        return preprocess_digital_document(image)
-    else:
-        return preprocess_scanned_document(image)
+    # For handwriting, always use specialized preprocessing
+    return preprocess_for_handwriting(image)
 
 
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
-
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]
     rect[2] = pts[np.argmax(s)]
-
     diff = np.diff(pts, axis=1)
     rect[1] = pts[np.argmin(diff)]
     rect[3] = pts[np.argmax(diff)]
-
     return rect
 
 
@@ -177,212 +163,78 @@ def manual_corner_selection(image):
     return None
 
 
-def verify_contour(image, contour):
-    contour_img = image.copy()
-    cv2.drawContours(contour_img, [contour], -1, (0, 255, 0), 3)
+def contour_detection(image, processed):
+    h, w = image.shape[:2]
 
-    for i, point in enumerate(contour):
-        cv2.circle(contour_img, tuple(point[0]), 10, (0, 0, 255), -1)
-        cv2.putText(
-            contour_img,
-            str(i),
-            tuple(point[0]),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 0, 0),
-            2,
-        )
-
-    cv2.imshow("Detected Contour - Press any key", contour_img)
-    cv2.waitKey(0)
-    cv2.destroyWindow("Detected Contour - Press any key")
-
-    print("\nIs the detected contour correct?")
-    print("1. Yes, use this contour")
-    print("2. No, let me select corners manually")
-    print("3. No, use whole image")
+    print("\nContour Detection Options:")
+    print("1. Auto-detect document edges")
+    print("2. Use whole image")
+    print("3. Manual corner selection")
 
     choice = input("Enter choice (1-3): ").strip()
-    return choice
 
-
-def contour_detection(image, processed):
-    edges1 = cv2.Canny(processed, 30, 100)
-    edges2 = cv2.Canny(processed, 50, 150)
-    edges3 = cv2.Canny(processed, 70, 200)
-
-    edges = cv2.bitwise_or(edges1, cv2.bitwise_or(edges2, edges3))
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    edges = cv2.dilate(edges, kernel, iterations=1)
-
-    print("Detecting Multi-scale Canny Edges")
-    show("Edges (Canny Multi-scale)", edges)
-
-    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        raise RuntimeError("No contours found!")
-
-    image_area = image.shape[0] * image.shape[1]
-    min_area = image_area * 0.05
-
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    contours = [c for c in contours if cv2.contourArea(c) > min_area]
-
-    doc_contour = None
-
-    for contour in contours[:15]:
-        peri = cv2.arcLength(contour, True)
-
-        for epsilon_factor in [
-            0.01,
-            0.015,
-            0.02,
-            0.025,
-            0.03,
-            0.035,
-            0.04,
-            0.045,
-            0.05,
-            0.06,
-            0.07,
-            0.08,
-        ]:
-            approx = cv2.approxPolyDP(contour, epsilon_factor * peri, True)
-
-            if len(approx) == 4:
-                area = cv2.contourArea(approx)
-                rect_area = cv2.contourArea(cv2.convexHull(approx))
-
-                if area / rect_area > 0.75:
-                    doc_contour = approx
-                    break
-
-        if doc_contour is not None:
-            break
-
-    if doc_contour is None:
-        print("No 4-point contour found, trying convex hull approach...")
-        if contours:
-            largest_contour = contours[0]
-            hull = cv2.convexHull(largest_contour)
-            peri = cv2.arcLength(hull, True)
-
-            for epsilon_factor in [
-                0.01,
-                0.02,
-                0.03,
-                0.04,
-                0.05,
-                0.06,
-                0.07,
-                0.08,
-                0.09,
-                0.1,
-            ]:
-                approx = cv2.approxPolyDP(hull, epsilon_factor * peri, True)
-
-                if len(approx) == 4:
-                    doc_contour = approx
-                    break
-                elif len(approx) > 4:
-                    points = approx.reshape(-1, 2)
-
-                    top_left = points[np.argmin(points.sum(axis=1))]
-                    bottom_right = points[np.argmax(points.sum(axis=1))]
-                    top_right = points[np.argmin(np.diff(points, axis=1))]
-                    bottom_left = points[np.argmax(np.diff(points, axis=1))]
-
-                    doc_contour = np.array(
-                        [[top_left], [top_right], [bottom_right], [bottom_left]],
-                        dtype=np.int32,
-                    )
-                    break
-
-    if doc_contour is None:
-        print("\nCould not automatically detect document corners.")
-        print("Choose an option:")
-        print("1. Use whole image")
-        print("2. Manually select corners")
-        choice = input("Enter choice (1 or 2): ").strip()
-
-        if choice == "1":
-            h, w = image.shape[:2]
-            doc_contour = np.array(
-                [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32
-            )
-            print("Using whole image as document area")
-        elif choice == "2":
-            doc_contour = manual_corner_selection(image)
-            if doc_contour is None:
-                print("Manual selection failed. Using whole image.")
-                h, w = image.shape[:2]
-                doc_contour = np.array(
-                    [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32
-                )
-        else:
-            print("Invalid choice. Using whole image.")
-            h, w = image.shape[:2]
-            doc_contour = np.array(
-                [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32
-            )
-    else:
-        doc_contour = doc_contour.reshape(4, 2)
-        doc_contour = order_points(doc_contour)
-        doc_contour = doc_contour.reshape(4, 1, 2).astype(np.int32)
-
-        user_choice = verify_contour(image, doc_contour)
-
-        if user_choice == "2":
-            print("\nManual corner selection mode...")
-            manual_contour = manual_corner_selection(image)
-            if manual_contour is not None:
-                doc_contour = manual_contour
-                doc_contour = doc_contour.reshape(4, 2)
-                doc_contour = order_points(doc_contour)
-                doc_contour = doc_contour.reshape(4, 1, 2).astype(np.int32)
-            else:
-                print("Manual selection failed. Using automatically detected contour.")
-        elif user_choice == "3":
-            print("\nUsing whole image...")
-            h, w = image.shape[:2]
-            doc_contour = np.array(
-                [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32
-            )
-            doc_contour = doc_contour.reshape(4, 2)
-            doc_contour = order_points(doc_contour)
-            doc_contour = doc_contour.reshape(4, 1, 2).astype(np.int32)
-
+    if choice == "2":
+        print("Using whole image...")
+        doc_contour = (
+            np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+            .reshape(4, 1, 2)
+            .astype(np.int32)
+        )
         return doc_contour
 
-    doc_contour = doc_contour.reshape(4, 2)
-    doc_contour = order_points(doc_contour)
-    doc_contour = doc_contour.reshape(4, 1, 2).astype(np.int32)
+    elif choice == "3":
+        doc_contour = manual_corner_selection(image)
+        if doc_contour is not None:
+            doc_contour = order_points(doc_contour.reshape(4, 2))
+            doc_contour = doc_contour.reshape(4, 1, 2).astype(np.int32)
+            return doc_contour
+        else:
+            print("Manual selection failed. Using whole image.")
+            doc_contour = (
+                np.array(
+                    [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32
+                )
+                .reshape(4, 1, 2)
+                .astype(np.int32)
+            )
+            return doc_contour
 
-    contour_img = image.copy()
-    cv2.drawContours(contour_img, [doc_contour], -1, (0, 255, 0), 3)
+    # Auto-detect (option 1)
+    edges = cv2.Canny(processed, 50, 150)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges = cv2.dilate(edges, kernel, iterations=2)
 
-    for i, point in enumerate(doc_contour):
-        cv2.circle(contour_img, tuple(point[0]), 10, (0, 0, 255), -1)
-        cv2.putText(
-            contour_img,
-            str(i),
-            tuple(point[0]),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 0, 0),
-            2,
-        )
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-    print("Contour Detection Done!")
-    show("Contour Detection", contour_img)
+    if contours:
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
 
+        for contour in contours:
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+
+            if len(approx) == 4:
+                doc_contour = order_points(approx.reshape(4, 2))
+                doc_contour = doc_contour.reshape(4, 1, 2).astype(np.int32)
+
+                # Show detected contour
+                contour_img = image.copy()
+                cv2.drawContours(contour_img, [doc_contour], -1, (0, 255, 0), 3)
+                show("Auto-detected Contour", contour_img)
+
+                return doc_contour
+
+    print("Auto-detection failed. Using whole image.")
+    doc_contour = (
+        np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+        .reshape(4, 1, 2)
+        .astype(np.int32)
+    )
     return doc_contour
 
 
 def perspective_transform(image, contour):
     rect = order_points(contour.reshape(4, 2))
-
     (tl, tr, br, bl) = rect
 
     widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
@@ -401,38 +253,28 @@ def perspective_transform(image, contour):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
-    print("Perspective Transform Applied")
     show("Warped Document", warped)
-
     return warped
 
 
 def select_language():
     print("\nSelect language for OCR:")
-    print("1. English only")
-    print("2. Hindi only")
-    print("3. Gujarati only")
-    print("4. English + Hindi")
-    print("5. English + Gujarati")
-    print("6. Hindi + Gujarati")
-    print("7. English + Hindi + Gujarati")
+    print("1. English")
+    print("2. Hindi")
+    print("3. Gujarati")
 
-    choice = input("Enter choice (1-7): ").strip()
+    choice = input("Enter choice (1-3): ").strip()
 
     language_map = {
         "1": ("eng", "English"),
         "2": ("hin", "Hindi"),
         "3": ("guj", "Gujarati"),
-        "4": ("eng+hin", "English + Hindi"),
-        "5": ("eng+guj", "English + Gujarati"),
-        "6": ("hin+guj", "Hindi + Gujarati"),
-        "7": ("eng+hin+guj", "English + Hindi + Gujarati"),
     }
 
     if choice in language_map:
         return language_map[choice]
     else:
-        print("Invalid choice. Using English only by default.")
+        print("Invalid choice. Using English by default.")
         return ("eng", "English")
 
 
@@ -442,24 +284,42 @@ def ai_spell_correction(text, lang_code):
         return text
 
     spell = SpellChecker()
-
     lines = text.split("\n")
     corrected_lines = []
-
-    print("\nPerforming AI-based Spell Correction...")
     corrections_made = 0
 
+    print("\nPerforming AI Spell Correction...")
+
     for line in lines:
+        if not line.strip():
+            corrected_lines.append(line)
+            continue
+
         words = line.split()
         corrected_words = []
 
         for word in words:
-            clean_word = re.sub(r"[^\w\s]", "", word)
+            # Keep punctuation
+            prefix = ""
+            suffix = ""
+            clean_word = word
+
+            # Extract leading/trailing punctuation
+            while clean_word and not clean_word[0].isalnum():
+                prefix += clean_word[0]
+                clean_word = clean_word[1:]
+
+            while clean_word and not clean_word[-1].isalnum():
+                suffix = clean_word[-1] + suffix
+                clean_word = clean_word[:-1]
 
             if clean_word and clean_word.isalpha() and len(clean_word) > 2:
-                correction = spell.correction(clean_word)
+                correction = spell.correction(clean_word.lower())
                 if correction and correction != clean_word.lower():
-                    corrected_words.append(correction)
+                    # Preserve original capitalization
+                    if clean_word[0].isupper():
+                        correction = correction.capitalize()
+                    corrected_words.append(prefix + correction + suffix)
                     corrections_made += 1
                 else:
                     corrected_words.append(word)
@@ -468,116 +328,235 @@ def ai_spell_correction(text, lang_code):
 
         corrected_lines.append(" ".join(corrected_words))
 
-    print(f"Spell correction complete. {corrections_made} corrections made.")
+    print(f"Corrections made: {corrections_made}")
     return "\n".join(corrected_lines)
 
 
-def text_extraction(image, lang_code, lang_name, output_file="extracted_text.txt"):
-    print(f"\nPerforming OCR with {lang_name}...")
+def text_extraction(
+    image, lang_code="eng", lang_name="English", output_file="extracted_text.txt"
+):
+    print(f"\nPerforming OCR ({lang_name})...")
 
-    custom_config = f"--oem 1 --psm 6 -l {lang_code}"
+    # Ensure image is grayscale
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
 
-    text = pytesseract.image_to_string(image, config=custom_config)
-    text = text.replace("\x0c", "").strip()
-
-    print("\nTrying alternative OCR configurations for better accuracy...")
-
-    configs_to_try = [
-        "--oem 1 --psm 3",
-        "--oem 1 --psm 4",
-        "--oem 1 --psm 6",
-        "--oem 3 --psm 6",
+    # Multiple OCR configurations optimized for handwriting
+    ocr_configs = [
+        ("--oem 1 --psm 6", "Uniform text block"),
+        ("--oem 1 --psm 4", "Single column text"),
+        ("--oem 1 --psm 3", "Fully automatic"),
+        ("--oem 1 --psm 11", "Sparse text"),
     ]
 
-    best_text = text
-    best_confidence = 0
+    results = []
 
-    for config in configs_to_try:
+    for config, description in ocr_configs:
         try:
-            temp_config = f"{config} -l {lang_code}"
-            data = pytesseract.image_to_data(
-                image, config=temp_config, output_type=pytesseract.Output.DICT
-            )
-            confidences = [int(conf) for conf in data["conf"] if int(conf) > 0]
+            print(f"  Trying: {description}...")
 
-            if confidences:
-                avg_conf = sum(confidences) / len(confidences)
-                if avg_conf > best_confidence:
-                    best_confidence = avg_conf
-                    best_text = pytesseract.image_to_string(image, config=temp_config)
-                    best_text = best_text.replace("\x0c", "").strip()
-        except:
+            # Get text with confidence
+            data = pytesseract.image_to_data(
+                gray,
+                config=f"{config} -l {lang_code}",
+                output_type=pytesseract.Output.DICT,
+            )
+
+            # Calculate average confidence
+            confidences = [
+                int(c) for c in data["conf"] if str(c).isdigit() and int(c) > 0
+            ]
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+
+            # Extract text
+            text = pytesseract.image_to_string(gray, config=f"{config} -l {lang_code}")
+            text = text.replace("\x0c", "").strip()
+
+            # Calculate text quality score
+            word_count = len([w for w in text.split() if len(w) > 2])
+            quality_score = avg_confidence * (1 + word_count / 100)
+
+            results.append(
+                {
+                    "text": text,
+                    "confidence": avg_confidence,
+                    "quality": quality_score,
+                    "method": description,
+                }
+            )
+
+            print(
+                f"    Confidence: {avg_confidence:.1f}%, Words: {word_count}, Score: {quality_score:.1f}"
+            )
+
+        except Exception as e:
+            print(f"    Failed: {e}")
             continue
 
-    print(f"Best OCR confidence: {best_confidence:.2f}%")
+    # Select best result
+    if not results:
+        print("All OCR attempts failed!")
+        return "", 0
 
-    corrected_text = ai_spell_correction(best_text, lang_code)
+    best_result = max(results, key=lambda x: x["quality"])
+    best_text = best_result["text"]
+    best_confidence = best_result["confidence"]
 
+    print(f"\nBest method: {best_result['method']}")
+    print(f"Final confidence: {best_confidence:.2f}%")
+
+    # Apply spell correction for English
+    if "eng" in lang_code:
+        corrected_text = ai_spell_correction(best_text, lang_code)
+    else:
+        corrected_text = best_text
+
+    # Save results
     with open(output_file, "w", encoding="utf-8") as f:
-        f.write(f"AI-Powered Document Scanner - OCR Results\n")
-        f.write(f"{'=' * 50}\n")
+        f.write("=" * 60 + "\n")
+        f.write("HANDWRITTEN TEXT EXTRACTION RESULTS\n")
+        f.write("=" * 60 + "\n\n")
         f.write(f"Language: {lang_name}\n")
-        f.write(f"OCR Confidence: {best_confidence:.2f}%\n")
-        f.write(f"{'-' * 50}\n")
+        f.write(f"OCR Method: {best_result['method']}\n")
+        f.write(f"Confidence: {best_confidence:.2f}%\n")
+        f.write(f"Quality Score: {best_result['quality']:.2f}\n")
+        f.write("\n" + "-" * 60 + "\n")
         f.write("EXTRACTED TEXT:\n")
-        f.write(f"{'-' * 50}\n")
+        f.write("-" * 60 + "\n\n")
         f.write(corrected_text)
 
-    print(f"\nExtracted Text ({lang_name}):\n{'-' * 50}")
-    print(corrected_text)
-    print(f"{'-' * 50}")
-    print(f"Text saved to: {output_file}")
+        # Also save original if spell-corrected
+        if corrected_text != best_text:
+            f.write("\n\n" + "-" * 60 + "\n")
+            f.write("ORIGINAL (BEFORE SPELL CHECK):\n")
+            f.write("-" * 60 + "\n\n")
+            f.write(best_text)
 
-    return corrected_text
+    print(f"\n{'=' * 60}")
+    print("EXTRACTED TEXT:")
+    print("=" * 60)
+    print(corrected_text)
+    print("=" * 60)
+    print(f"\nResults saved to: {output_file}")
+
+    return corrected_text, best_confidence
 
 
 def save_processed_image(image, filename):
     output_path = os.path.join(OUTPUT_DIR, filename)
     cv2.imwrite(output_path, image)
     print(f"Saved: {output_path}")
+    return output_path
+
+
+def enhance_image_quality(image):
+    if len(image.shape) == 2:
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    else:
+        image_rgb = image
+
+    lab = cv2.cvtColor(image_rgb, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    enhanced = cv2.filter2D(enhanced, -1, kernel)
+
+    return enhanced
+
+
+def convert_to_high_quality_jpg(image, output_filename):
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+    enhanced = enhance_image_quality(image)
+    pil_image = Image.fromarray(cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB))
+    pil_image.save(output_path, "JPEG", quality=95, optimize=True, dpi=(300, 300))
+    print(f"High-quality JPG saved: {output_path}")
+    return output_path
+
+
+def convert_image_to_pdf(image, output_filename):
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
+    enhanced = enhance_image_quality(image)
+    pil_image = Image.fromarray(cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB))
+    pil_image.save(output_path, "PDF", resolution=300.0, quality=95)
+    print(f"PDF saved: {output_path}")
+    return output_path
 
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print("=" * 60)
-    print("AI-POWERED DOCUMENT SCANNER WITH OCR")
+    print("HANDWRITTEN TEXT EXTRACTION SYSTEM")
     print("=" * 60)
 
-    image, processed, binarized = preprocessing(IMG)
-    save_processed_image(binarized, "01_preprocessed.png")
+    # Step 1: Preprocessing
+    image, processed, final_preprocessed = preprocessing(IMG)
+    save_processed_image(final_preprocessed, "01_preprocessed.png")
 
-    print("\nSkip contour detection for digital documents? (y/n): ", end="")
-    skip_contour = input().strip().lower()
+    # Step 2: Contour detection (optional)
+    contour = contour_detection(image, processed)
 
-    if skip_contour == "y":
-        print("Using whole image...")
-        warped_bin = binarized
+    # Step 3: Perspective transform
+    if contour is not None:
+        h, w = image.shape[:2]
+        full_image_contour = np.array(
+            [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32
+        ).reshape(4, 2)
+
+        contour_reshaped = contour.reshape(4, 2)
+
+        # Check if contour is essentially the whole image
+        if not np.allclose(contour_reshaped, full_image_contour, atol=20):
+            warped = perspective_transform(image, contour)
+            warped_preprocessed = perspective_transform(final_preprocessed, contour)
+            final_image = warped
+            final_for_ocr = warped_preprocessed
+        else:
+            final_image = image
+            final_for_ocr = final_preprocessed
     else:
-        contour = contour_detection(image, processed)
-        warped = perspective_transform(image, contour)
-        save_processed_image(warped, "02_warped.png")
+        final_image = image
+        final_for_ocr = final_preprocessed
 
-        warped_gray = (
-            cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-            if len(warped.shape) == 3
-            else warped
-        )
+    save_processed_image(final_for_ocr, "02_final_ocr_ready.png")
+    show("Final Image for OCR", final_for_ocr)
 
-        warped_bin = cv2.threshold(
-            warped_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )[1]
-
-    show("Final Document for OCR", warped_bin)
-    save_processed_image(warped_bin, "03_final_ocr_ready.png")
-
+    # Step 4: Language selection and OCR
     lang_code, lang_name = select_language()
-    text = text_extraction(warped_bin, lang_code, lang_name)
+    text, confidence = text_extraction(
+        final_for_ocr,
+        lang_code,
+        lang_name,
+        os.path.join(OUTPUT_DIR, "extracted_text.txt"),
+    )
 
+    # Step 5: Save output formats
     print("\n" + "=" * 60)
-    print("AI-POWERED DOCUMENT PROCESSING COMPLETE")
+    print("GENERATING OUTPUT FILES")
     print("=" * 60)
-    print(f"\nAll outputs saved in: {OUTPUT_DIR}/")
+
+    jpg_path = convert_to_high_quality_jpg(final_image, "scanned_document.jpg")
+    pdf_path = convert_image_to_pdf(final_image, "scanned_document.pdf")
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("PROCESSING COMPLETE!")
+    print("=" * 60)
+    print(f"\nOutput directory: {OUTPUT_DIR}/")
+    print("\nGenerated files:")
+    print("  ✓ Preprocessed image: 01_preprocessed.png")
+    print("  ✓ OCR-ready image: 02_final_ocr_ready.png")
+    print("  ✓ High-quality JPG: scanned_document.jpg")
+    print("  ✓ PDF: scanned_document.pdf")
+    print("  ✓ Extracted text: extracted_text.txt")
+    print(f"\nOCR Quality: {confidence:.1f}% confidence")
+    print(f"Text length: {len(text)} characters")
 
 
 if __name__ == "__main__":

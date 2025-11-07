@@ -1,1 +1,17 @@
+blinker==1.9.0
+click==8.3.0
+inexactsearch==1.0.2
+itsdangerous==2.2.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
 numpy==2.2.6
+opencv-contrib-python==4.12.0.88
+opencv-python==4.12.0.88
+packaging==25.0
+pillow==12.0.0
+pyspellchecker==0.8.3
+pytesseract==0.3.13
+silpa-common==0.3
+soundex==1.1.3
+spellchecker==0.4
+Werkzeug==3.1.3
