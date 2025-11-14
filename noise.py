@@ -3,7 +3,7 @@ import numpy as np
 
 # Load the original image
 input_path = (
-    "/home/krushang/radhey/personal/college/Doc-Scanner-Project/test/printed_guj.png"
+    "/home/krushang/radhey/personal/college/Doc-Scanner-Project/test/english.png"
 )
 image = Image.open(input_path).convert("RGB")
 
@@ -23,6 +23,6 @@ noisy_image = Image.fromarray(noisy_img_array)
 
 # Save the noisy image
 noisy_image.save(
-    "/home/krushang/radhey/personal/college/Doc-Scanner-Project/test/noise_guj.png"
+    "/home/krushang/radhey/personal/college/Doc-Scanner-Project/test/noise_eng_written.png"
 )
 print("Noisy Image Created")

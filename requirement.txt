@@ -1,5 +1,6 @@
 blinker==1.9.0
 click==8.3.0
+fpdf==1.7.2
 inexactsearch==1.0.2
 itsdangerous==2.2.0
 Jinja2==3.1.6
